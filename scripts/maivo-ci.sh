@@ -73,6 +73,7 @@ __setup_runtime_host() {
 
 __init_ci_dirs() {
   sudo install -d -m 0755 "$_test_root" "$_image_cache_dir"
+  sudo chown -R "$(id -u):$(id -g)" "$_test_root"
 }
 
 __build_maivo_binaries() {
@@ -213,32 +214,37 @@ __assert_maivo_ready() {
   docker info --format '{{json .Runtimes}}' | jq -e 'has("maivo-runtime")' >/dev/null
 }
 
-__run_workloads() {
+__run_workload() {
   __require_cmd docker
   __require_cmd jq
   __require_cmd flock
-  local -a _workloads=("$@")
+  local _workload="$1"
+
+  if [[ -z "$_workload" || "$_workload" == "all" ]]; then
+    echo "run-workload requires one concrete workload name" >&2
+    exit 2
+  fi
 
   __assert_maivo_ready
+  export MAIVO_CI_TEST_ROOT="$_test_root"
+  export MAIVO_CI_IMAGE_CACHE_DIR="$_image_cache_dir"
+  export MAIVO_WORKLOAD_RUN_ID="$_resource_id"
+
+  bash "${_runtime_test_dir}/run.sh" run "$_workload"
+}
+
+__run_workloads() {
+  local -a _workloads=("$@")
+
   if (( ${#_workloads[@]} == 0 )); then
     read -r -a _workloads <<<"${MAIVO_CI_WORKLOADS:-procfs-cpu}"
   fi
   if (( ${#_workloads[@]} == 0 )); then
     _workloads=(procfs-cpu)
   fi
-
-  export MAIVO_CI_TEST_ROOT="$_test_root"
-  export MAIVO_CI_IMAGE_CACHE_DIR="$_image_cache_dir"
-  export MAIVO_WORKLOAD_RUN_ID="$_resource_id"
-
-  case "${_workloads[*]}" in
-  all)
-    bash "${_runtime_test_dir}/run.sh" all
-    ;;
-  *)
-    bash "${_runtime_test_dir}/run.sh" parallel "${_workloads[@]}"
-    ;;
-  esac
+  for _workload in "${_workloads[@]}"; do
+    __run_workload "$_workload"
+  done
 }
 
 __collect_logs() {
@@ -280,6 +286,7 @@ commands:
   show-host-capabilities
   setup-runtime-host
   verify-gate
+  run-workload <workload>
   run-workloads [workload...]
   collect-logs
   warm-go-cache
@@ -298,6 +305,10 @@ setup-runtime-host)
   ;;
 verify-gate)
   __verify_gate
+  ;;
+run-workload)
+  shift
+  __run_workload "${1:-}"
   ;;
 run-workloads)
   shift

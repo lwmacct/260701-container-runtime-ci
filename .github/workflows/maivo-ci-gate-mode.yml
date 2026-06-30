@@ -13,10 +13,25 @@ on:
         required: true
         default: false
         type: boolean
-      workloads:
-        description: Runtime workloads to run, separated by spaces; use all for every migrated workload
+      debug_workload:
+        description: Workload that opens tmate when debug_tmate is true
         required: true
         default: procfs-cpu
+        type: string
+      workload_group:
+        description: Workload group to run
+        required: true
+        default: default
+        type: choice
+        options:
+          - default
+          - extended
+          - all
+          - custom
+      workloads:
+        description: Space-separated workloads, used when workload_group is custom
+        required: false
+        default: ""
         type: string
 
 concurrency:
@@ -38,15 +53,75 @@ env:
   MAIVO_GATE_MODE: ci
   MAIVO_CI_TEST_ROOT: /tmp/maivo
   MAIVO_CI_IMAGE_CACHE_DIR: /tmp/maivo/images
-  MAIVO_CI_WORKLOADS: ${{ inputs.workloads || 'procfs-cpu' }}
 
 jobs:
-  setup:
-    name: Setup Maivo with CI gate mode
+  prepare:
+    name: Prepare workload matrix
+    runs-on: ubuntu-24.04
+    outputs:
+      workloads: ${{ steps.matrix.outputs.workloads }}
+    steps:
+      - name: Checkout CI repository
+        uses: actions/checkout@v7.0.0
+
+      - name: Build workload matrix
+        id: matrix
+        env:
+          WORKLOAD_GROUP: ${{ inputs.workload_group || 'default' }}
+          CUSTOM_WORKLOADS: ${{ inputs.workloads || '' }}
+        run: |
+          python3 - <<'PY' >>"$GITHUB_OUTPUT"
+          import json
+          import os
+          import pathlib
+          import shlex
+          import sys
+
+          root = pathlib.Path("ci/runtime/test/workloads")
+          available = sorted(path.name for path in root.iterdir() if (path / "run.sh").is_file())
+          groups = {
+              "default": ["procfs-cpu", "procfs-memory", "seccomp-notify-concurrency"],
+              "extended": [
+                  "procfs-cpu",
+                  "procfs-memory",
+                  "seccomp-notify-concurrency",
+                  "systemd-pid1",
+                  "docker-in-docker",
+                  "kubernetes-k3s",
+              ],
+              "all": available,
+          }
+          group = os.environ.get("WORKLOAD_GROUP", "default").strip() or "default"
+          if group == "custom":
+              workloads = shlex.split(os.environ.get("CUSTOM_WORKLOADS", ""))
+          elif group in groups:
+              workloads = groups[group]
+          else:
+              print(f"unknown workload_group: {group}", file=sys.stderr)
+              sys.exit(2)
+          if not workloads:
+              print("no workloads selected", file=sys.stderr)
+              sys.exit(2)
+          unknown = [workload for workload in workloads if workload not in available]
+          if unknown:
+              print(f"unknown workloads: {', '.join(unknown)}", file=sys.stderr)
+              print(f"available workloads: {', '.join(available)}", file=sys.stderr)
+              sys.exit(2)
+          print(f"workloads={json.dumps(workloads)}")
+          PY
+
+  runtime-test:
+    name: Runtime workload / ${{ matrix.workload }}
+    needs: prepare
     runs-on: ubuntu-24.04
     timeout-minutes: 90
-    outputs:
-      go-cache-hit: ${{ steps.go-cache.outputs.cache-hit }}
+    strategy:
+      fail-fast: false
+      max-parallel: 7
+      matrix:
+        workload: ${{ fromJson(needs.prepare.outputs.workloads) }}
+    env:
+      MAIVO_WORKLOAD_RUN_ID: ${{ github.run_id }}-${{ github.run_attempt }}-${{ matrix.workload }}
     steps:
       - name: Checkout CI repository
         uses: actions/checkout@v7.0.0
@@ -69,7 +144,7 @@ jobs:
           token: ${{ secrets.MAIVO_REPO_TOKEN }}
 
       - name: Open tmate session
-        if: ${{ github.event_name == 'workflow_dispatch' && inputs.debug_tmate }}
+        if: ${{ github.event_name == 'workflow_dispatch' && inputs.debug_tmate && matrix.workload == inputs.debug_workload }}
         uses: mxschmitt/action-tmate@v3
         with:
           limit-access-to-actor: true
@@ -110,8 +185,8 @@ jobs:
       - name: Verify CI gate mode
         run: bash scripts/maivo-ci.sh verify-gate
 
-      - name: Run runtime workloads
-        run: bash scripts/maivo-ci.sh run-workloads
+      - name: Run runtime workload
+        run: bash scripts/maivo-ci.sh run-workload "${{ matrix.workload }}"
 
       - name: Collect logs
         if: always()
@@ -121,15 +196,15 @@ jobs:
         if: always()
         uses: actions/upload-artifact@v7.0.1
         with:
-          name: maivo-ci-gate-mode-${{ github.run_id }}-${{ github.run_attempt }}
+          name: maivo-runtime-${{ matrix.workload }}-${{ github.run_id }}-${{ github.run_attempt }}
           path: ${{ env.MAIVO_CI_TEST_ROOT }}/runs/**/*.log
           if-no-files-found: ignore
 
   cache-warmup:
     name: Cache warmup
     runs-on: ubuntu-24.04
-    needs: setup
-    if: needs.setup.result == 'success' && needs.setup.outputs.go-cache-hit != 'true'
+    needs: runtime-test
+    if: needs.runtime-test.result == 'success'
     permissions:
       actions: write
       contents: read
@@ -138,10 +213,6 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
           MAIVO_REF: ${{ inputs.maivo_ref || 'main' }}
-          GO_CACHE_HIT: ${{ needs.setup.outputs.go-cache-hit }}
         run: |
           set -euo pipefail
-
-          if [[ "${GO_CACHE_HIT}" != "true" ]]; then
-            gh workflow run cache-warmup-go.yml --repo "${GITHUB_REPOSITORY}" --ref main -f maivo_ref="${MAIVO_REF}"
-          fi
+          gh workflow run cache-warmup-go.yml --repo "${GITHUB_REPOSITORY}" --ref main -f maivo_ref="${MAIVO_REF}"
