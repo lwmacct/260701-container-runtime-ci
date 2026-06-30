@@ -14,3 +14,7 @@ only the resources needed by runtime validation:
 
 When manually dispatching the workflow, enable `debug_tmate` to open an SSH
 session on the GitHub-hosted runner before the probe runs.
+
+`Maivo CI Gate Mode` checks out `lwmacct/260522-maivo` and runs
+`task ci:test:setup` with `MAIVO_GATE_MODE=ci`, which verifies that the daemon
+can start on standard GitHub-hosted runners without active BPF LSM.

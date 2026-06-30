@@ -20,10 +20,6 @@ on:
         required: true
         default: false
         type: boolean
-  push:
-    branches:
-      - main
-
 concurrency:
   group: runtime-resource-probe-${{ github.ref }}
   cancel-in-progress: true

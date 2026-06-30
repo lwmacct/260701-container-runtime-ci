@@ -1,0 +1,140 @@
+name: Maivo CI Gate Mode
+
+on:
+  workflow_dispatch:
+    inputs:
+      maivo_ref:
+        description: Branch, tag, or SHA from lwmacct/260522-maivo
+        required: true
+        default: main
+        type: string
+      debug_tmate:
+        description: Open an interactive SSH session before setup
+        required: true
+        default: false
+        type: boolean
+  push:
+    branches:
+      - main
+
+concurrency:
+  group: maivo-ci-gate-mode-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+defaults:
+  run:
+    shell: bash
+
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+  GOPROXY: https://goproxy.cn,direct
+  GOSUMDB: sum.golang.google.cn
+  BUILDTAGS: seccomp idmapped_mnt
+  MAIVO_GATE_MODE: ci
+  MAIVO_CI_TEST_ROOT: /tmp/maivo
+  MAIVO_CI_IMAGE_CACHE_DIR: /tmp/maivo/images
+
+jobs:
+  setup:
+    name: Setup Maivo with CI gate mode
+    runs-on: ubuntu-24.04
+    timeout-minutes: 90
+    steps:
+      - name: Checkout Maivo
+        uses: actions/checkout@v4
+        with:
+          repository: lwmacct/260522-maivo
+          ref: ${{ inputs.maivo_ref || 'main' }}
+          path: maivo
+
+      - name: Open tmate session
+        if: ${{ github.event_name == 'workflow_dispatch' && inputs.debug_tmate }}
+        uses: mxschmitt/action-tmate@v3
+        with:
+          limit-access-to-actor: true
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: maivo/go.mod
+          cache-dependency-path: maivo/go.sum
+          cache: true
+
+      - name: Install Task
+        working-directory: maivo
+        run: |
+          go install github.com/go-task/task/v3/cmd/task@v3.50.0
+          _go_path="$(go env GOPATH)"
+          echo "${_go_path}/bin" >>"$GITHUB_PATH"
+          export PATH="${_go_path}/bin:$PATH"
+          task --version
+
+      - name: Install dependencies
+        run: |
+          sudo apt-get update
+          sudo DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
+            build-essential \
+            jq \
+            libseccomp-dev \
+            pkg-config \
+            util-linux
+
+      - name: Show host capabilities
+        run: |
+          set -euxo pipefail
+          uname -a
+          cat /sys/kernel/security/lsm || true
+          findmnt /sys/fs/bpf || true
+          docker version
+          docker info
+          go version
+          task --version
+
+      - name: Setup Maivo runtime host
+        working-directory: maivo
+        run: |
+          sudo -E env \
+            "PATH=$PATH" \
+            "BUILDTAGS=$BUILDTAGS" \
+            "MAIVO_GATE_MODE=$MAIVO_GATE_MODE" \
+            "MAIVO_CI_TEST_ROOT=$MAIVO_CI_TEST_ROOT" \
+            "MAIVO_CI_IMAGE_CACHE_DIR=$MAIVO_CI_IMAGE_CACHE_DIR" \
+            task ci:test:setup
+
+      - name: Verify CI gate mode
+        run: |
+          sudo systemctl is-active --quiet maivo-daemon.service
+          sudo systemctl cat maivo-daemon.service
+          maivo-daemon gate status
+          maivo-daemon gate status | jq -e '.mode == "ci" and .enforce == false'
+
+      - name: Collect logs
+        if: always()
+        run: |
+          _log_dir="${MAIVO_CI_TEST_ROOT}/runs/${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}/logs"
+          sudo install -d -m 0755 "$_log_dir"
+          {
+            uname -a || true
+            cat /sys/kernel/security/lsm || true
+            findmnt /sys/fs/bpf || true
+            docker info || true
+            sudo systemctl --no-pager --full status docker.service maivo-daemon.service || true
+            sudo systemctl cat maivo-daemon.service || true
+            maivo-daemon gate status || true
+            sudo journalctl --no-pager -u docker.service -u maivo-daemon.service || true
+          } 2>&1 | sudo tee "${_log_dir}/host-diagnostics.log" >/dev/null
+          if sudo test -f /var/log/maivo-daemon.log; then
+            sudo cp /var/log/maivo-daemon.log "${_log_dir}/maivo-daemon.log"
+            sudo chmod 0644 "${_log_dir}/maivo-daemon.log"
+          fi
+
+      - name: Upload logs
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: maivo-ci-gate-mode-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ env.MAIVO_CI_TEST_ROOT }}/runs/**/*.log
+          if-no-files-found: ignore
