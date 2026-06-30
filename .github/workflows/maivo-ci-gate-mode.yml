@@ -115,8 +115,8 @@ jobs:
         run: |
           sudo systemctl is-active --quiet maivo-daemon.service
           sudo systemctl cat maivo-daemon.service
-          maivo-daemon gate status
-          maivo-daemon gate status | jq -e '.mode == "ci" and .enforce == false'
+          sudo maivo-daemon gate status
+          sudo maivo-daemon gate status | jq -e '.mode == "ci" and .enforce == false'
 
       - name: Collect logs
         if: always()
@@ -130,7 +130,7 @@ jobs:
             docker info || true
             sudo systemctl --no-pager --full status docker.service maivo-daemon.service || true
             sudo systemctl cat maivo-daemon.service || true
-            maivo-daemon gate status || true
+            sudo maivo-daemon gate status || true
             sudo journalctl --no-pager -u docker.service -u maivo-daemon.service || true
           } 2>&1 | sudo tee "${_log_dir}/host-diagnostics.log" >/dev/null
           if sudo test -f /var/log/maivo-daemon.log; then
