@@ -1,4 +1,4 @@
-ARG BASE_IMAGE=1181.s.kuaicdn.cn:11818/docker.io/library/ubuntu:24.04
+ARG BASE_IMAGE=docker.io/library/ubuntu:24.04
 FROM ${BASE_IMAGE}
 
 ENV container=docker

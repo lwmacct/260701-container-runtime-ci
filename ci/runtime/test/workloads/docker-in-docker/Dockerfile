@@ -1,4 +1,4 @@
-ARG BASE_IMAGE=1181.s.kuaicdn.cn:11818/ghcr.io/lwmacct/250210-cr-docker:29.4.0-dind-260408
+ARG BASE_IMAGE=ghcr.io/lwmacct/250210-cr-docker:29.4.0-dind-260408
 FROM ${BASE_IMAGE}
 
 COPY smoke.sh /usr/local/bin/maivo-ci-docker-in-docker-smoke

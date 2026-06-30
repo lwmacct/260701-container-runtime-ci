@@ -1,4 +1,4 @@
-ARG BASE_IMAGE=1181.s.kuaicdn.cn:11818/docker.io/rancher/k3s:v1.30.6-k3s1
+ARG BASE_IMAGE=docker.io/rancher/k3s:v1.30.6-k3s1
 FROM ${BASE_IMAGE}
 
 RUN mkdir -p /opt/maivo-ci /etc/cni/net.d && \
