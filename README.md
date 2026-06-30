@@ -33,11 +33,5 @@ token with read-only Contents permission on `lwmacct/260522-maivo` is enough.
 The workflow is manual-only so pushes to this public probe repository do not
 fail before the secret exists.
 
-The Maivo workflow restores an explicit warm Go cache before building:
-
-- `cache-warmup-go` stores Go modules and build cache keyed by the Maivo
-  `go.sum` and resolved Go version.
-
-Task is installed with `go-task/setup-task@v2`. If a manual Maivo run succeeds
-with the Go cache missing, it triggers the warmup workflow for the next run.
-The warmup workflow can also be run manually.
+The workflow uses `actions/setup-go` built-in caching for the checked out Maivo
+module. Task is installed with `go-task/setup-task@v2`.

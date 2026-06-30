@@ -150,22 +150,11 @@ jobs:
           limit-access-to-actor: true
 
       - name: Set up Go
-        id: setup-go
         uses: actions/setup-go@v6.5.0
         with:
           go-version-file: maivo/go.mod
-          cache: false
-
-      - name: Restore Go modules and build cache
-        id: go-cache
-        uses: actions/cache/restore@v6.1.0
-        with:
-          path: |
-            ~/.cache/go-build
-            ~/go/pkg/mod
-          key: cache-warmup-${{ runner.os }}-${{ runner.arch }}-go-${{ steps.setup-go.outputs.go-version }}-${{ hashFiles('maivo/go.sum') }}
-          restore-keys: |
-            cache-warmup-${{ runner.os }}-${{ runner.arch }}-go-${{ steps.setup-go.outputs.go-version }}-
+          cache-dependency-path: maivo/go.sum
+          cache: true
 
       - name: Install Task
         uses: go-task/setup-task@v2
@@ -199,20 +188,3 @@ jobs:
           name: maivo-runtime-${{ matrix.workload }}-${{ github.run_id }}-${{ github.run_attempt }}
           path: ${{ env.MAIVO_CI_TEST_ROOT }}/runs/**/*.log
           if-no-files-found: ignore
-
-  cache-warmup:
-    name: Cache warmup
-    runs-on: ubuntu-24.04
-    needs: runtime-test
-    if: needs.runtime-test.result == 'success'
-    permissions:
-      actions: write
-      contents: read
-    steps:
-      - name: Trigger warm cache workflows
-        env:
-          GH_TOKEN: ${{ github.token }}
-          MAIVO_REF: ${{ inputs.maivo_ref || 'main' }}
-        run: |
-          set -euo pipefail
-          gh workflow run cache-warmup-go.yml --repo "${GITHUB_REPOSITORY}" --ref main -f maivo_ref="${MAIVO_REF}"

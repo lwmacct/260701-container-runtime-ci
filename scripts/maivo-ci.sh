@@ -271,12 +271,6 @@ __collect_logs() {
   fi
 }
 
-__warm_go_cache() {
-  cd "$_maivo_dir"
-  go mod download
-  BIN_DIR=bin BUILDTAGS="${_build_tags}" task build
-}
-
 __usage() {
   cat <<'EOF'
 usage: scripts/maivo-ci.sh <command>
@@ -289,7 +283,6 @@ commands:
   run-workload <workload>
   run-workloads [workload...]
   collect-logs
-  warm-go-cache
 EOF
 }
 
@@ -316,9 +309,6 @@ run-workloads)
   ;;
 collect-logs)
   __collect_logs
-  ;;
-warm-go-cache)
-  __warm_go_cache
   ;;
 -h | --help | help)
   __usage
