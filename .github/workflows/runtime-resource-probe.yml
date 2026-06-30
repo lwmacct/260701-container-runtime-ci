@@ -41,7 +41,7 @@ jobs:
       PROBE_LOG_DIR: /tmp/runtime-resource-probe
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7.0.0
 
       - name: Open tmate session
         if: ${{ github.event_name == 'workflow_dispatch' && inputs.debug_tmate }}
@@ -63,7 +63,7 @@ jobs:
 
       - name: Upload probe logs
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7.0.1
         with:
           name: runtime-resource-probe-${{ github.run_id }}-${{ github.run_attempt }}
           path: ${{ env.PROBE_LOG_DIR }}/**

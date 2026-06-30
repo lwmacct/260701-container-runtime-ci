@@ -1,0 +1,101 @@
+name: cache-warmup-go
+
+on:
+  workflow_dispatch:
+    inputs:
+      maivo_ref:
+        description: Branch, tag, or SHA from lwmacct/260522-maivo
+        required: true
+        default: main
+        type: string
+
+concurrency:
+  group: cache-warmup-go-main
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+defaults:
+  run:
+    shell: bash
+
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+  GOPROXY: https://goproxy.cn,direct
+  GOSUMDB: sum.golang.google.cn
+  BUILDTAGS: seccomp idmapped_mnt
+
+jobs:
+  warm:
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Checkout CI repository
+        uses: actions/checkout@v7.0.0
+        with:
+          ref: main
+
+      - name: Require private repository token
+        env:
+          MAIVO_REPO_TOKEN: ${{ secrets.MAIVO_REPO_TOKEN }}
+        run: |
+          if [[ -z "${MAIVO_REPO_TOKEN}" ]]; then
+            echo "::error::Set repository secret MAIVO_REPO_TOKEN with read access to lwmacct/260522-maivo."
+            exit 1
+          fi
+
+      - name: Checkout Maivo
+        uses: actions/checkout@v7.0.0
+        with:
+          repository: lwmacct/260522-maivo
+          ref: ${{ inputs.maivo_ref || 'main' }}
+          path: maivo
+          token: ${{ secrets.MAIVO_REPO_TOKEN }}
+
+      - name: Set up Go
+        id: setup-go
+        uses: actions/setup-go@v6.5.0
+        with:
+          go-version-file: maivo/go.mod
+          cache: false
+
+      - name: Restore Go modules and build cache
+        id: go-cache
+        uses: actions/cache/restore@v6.1.0
+        with:
+          path: |
+            ~/.cache/go-build
+            ~/go/pkg/mod
+          key: cache-warmup-${{ runner.os }}-${{ runner.arch }}-go-${{ steps.setup-go.outputs.go-version }}-${{ hashFiles('maivo/go.sum') }}
+          restore-keys: |
+            cache-warmup-${{ runner.os }}-${{ runner.arch }}-go-${{ steps.setup-go.outputs.go-version }}-
+
+      - name: Install build dependencies
+        run: |
+          sudo apt-get update
+          sudo DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
+            build-essential \
+            libseccomp-dev \
+            pkg-config
+
+      - name: Install Task
+        uses: go-task/setup-task@v2
+        with:
+          version: 3.50.0
+          repo-token: ${{ github.token }}
+
+      - name: Warm Go build cache
+        working-directory: maivo
+        run: |
+          set -euo pipefail
+          go mod download
+          BIN_DIR=bin BUILDTAGS="${BUILDTAGS}" task build
+
+      - name: Save Go modules and build cache
+        if: steps.go-cache.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v6.1.0
+        with:
+          path: |
+            ~/.cache/go-build
+            ~/go/pkg/mod
+          key: ${{ steps.go-cache.outputs.cache-primary-key }}

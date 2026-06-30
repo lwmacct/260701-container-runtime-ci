@@ -39,7 +39,12 @@ jobs:
     name: Setup Maivo with CI gate mode
     runs-on: ubuntu-24.04
     timeout-minutes: 90
+    outputs:
+      go-cache-hit: ${{ steps.go-cache.outputs.cache-hit }}
     steps:
+      - name: Checkout CI repository
+        uses: actions/checkout@v7.0.0
+
       - name: Require private repository token
         env:
           MAIVO_REPO_TOKEN: ${{ secrets.MAIVO_REPO_TOKEN }}
@@ -50,7 +55,7 @@ jobs:
           fi
 
       - name: Checkout Maivo
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7.0.0
         with:
           repository: lwmacct/260522-maivo
           ref: ${{ inputs.maivo_ref || 'main' }}
@@ -64,20 +69,28 @@ jobs:
           limit-access-to-actor: true
 
       - name: Set up Go
-        uses: actions/setup-go@v5
+        id: setup-go
+        uses: actions/setup-go@v6.5.0
         with:
           go-version-file: maivo/go.mod
-          cache-dependency-path: maivo/go.sum
-          cache: true
+          cache: false
+
+      - name: Restore Go modules and build cache
+        id: go-cache
+        uses: actions/cache/restore@v6.1.0
+        with:
+          path: |
+            ~/.cache/go-build
+            ~/go/pkg/mod
+          key: cache-warmup-${{ runner.os }}-${{ runner.arch }}-go-${{ steps.setup-go.outputs.go-version }}-${{ hashFiles('maivo/go.sum') }}
+          restore-keys: |
+            cache-warmup-${{ runner.os }}-${{ runner.arch }}-go-${{ steps.setup-go.outputs.go-version }}-
 
       - name: Install Task
-        working-directory: maivo
-        run: |
-          go install github.com/go-task/task/v3/cmd/task@v3.50.0
-          _go_path="$(go env GOPATH)"
-          echo "${_go_path}/bin" >>"$GITHUB_PATH"
-          export PATH="${_go_path}/bin:$PATH"
-          task --version
+        uses: go-task/setup-task@v2
+        with:
+          version: 3.50.0
+          repo-token: ${{ github.token }}
 
       - name: Install dependencies
         run: |
@@ -140,8 +153,29 @@ jobs:
 
       - name: Upload logs
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7.0.1
         with:
           name: maivo-ci-gate-mode-${{ github.run_id }}-${{ github.run_attempt }}
           path: ${{ env.MAIVO_CI_TEST_ROOT }}/runs/**/*.log
           if-no-files-found: ignore
+
+  cache-warmup:
+    name: Cache warmup
+    runs-on: ubuntu-24.04
+    needs: setup
+    if: needs.setup.result == 'success' && needs.setup.outputs.go-cache-hit != 'true'
+    permissions:
+      actions: write
+      contents: read
+    steps:
+      - name: Trigger warm cache workflows
+        env:
+          GH_TOKEN: ${{ github.token }}
+          MAIVO_REF: ${{ inputs.maivo_ref || 'main' }}
+          GO_CACHE_HIT: ${{ needs.setup.outputs.go-cache-hit }}
+        run: |
+          set -euo pipefail
+
+          if [[ "${GO_CACHE_HIT}" != "true" ]]; then
+            gh workflow run cache-warmup-go.yml --repo "${GITHUB_REPOSITORY}" --ref main -f maivo_ref="${MAIVO_REF}"
+          fi
