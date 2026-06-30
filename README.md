@@ -15,9 +15,10 @@ only the resources needed by runtime validation:
 When manually dispatching the workflow, enable `debug_tmate` to open an SSH
 session on the GitHub-hosted runner before the probe runs.
 
-`Maivo CI Gate Mode` checks out `lwmacct/260522-maivo` as the tested source
-tree. The runtime setup, gate check, diagnostics, and workload flow live in this
-repository under `scripts/maivo-ci.sh` and `ci/runtime/test/`.
+`Maivo CI Gate Mode` validates binaries extracted from a public GHCR image,
+for example `ghcr.io/lwmacct/260522-maivo:v0.33.260701`. The runtime setup,
+gate check, diagnostics, and workload flow live in this repository under
+`scripts/maivo-ci.sh` and `ci/runtime/test/`.
 
 All migrated runtime workloads are stored in `ci/runtime/test/workloads/`.
 The workflow runs workloads as a GitHub Actions matrix, so every workload gets
@@ -27,11 +28,7 @@ The default group runs `procfs-cpu`, `procfs-memory`, and
 `seccomp-notify-concurrency`. Manual runs can select `extended`, `all`, or
 `custom` with a space-separated `workloads` value.
 
-Because `lwmacct/260522-maivo` is private, configure repository secret
-`MAIVO_REPO_TOKEN` before running `Maivo CI Gate Mode`. A fine-grained GitHub
-token with read-only Contents permission on `lwmacct/260522-maivo` is enough.
-The workflow is manual-only so pushes to this public probe repository do not
-fail before the secret exists.
-
-The workflow uses `actions/setup-go` built-in caching for the checked out Maivo
-module. Task is installed with `go-task/setup-task@v2`.
+The workflow is manual-only. It does not need access to the private Maivo
+source repository. It installs ORAS, fetches the selected linux/amd64 image
+manifest and layers, extracts `/usr/local/bin/maivo-daemon` and
+`/usr/local/bin/maivo-runtime`, then installs those binaries on the runner.

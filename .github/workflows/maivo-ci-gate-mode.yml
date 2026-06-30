@@ -3,10 +3,10 @@ name: Maivo CI Gate Mode
 on:
   workflow_dispatch:
     inputs:
-      maivo_ref:
-        description: Branch, tag, or SHA from lwmacct/260522-maivo
+      maivo_image:
+        description: Public Maivo image containing maivo-daemon and maivo-runtime
         required: true
-        default: main
+        default: ghcr.io/lwmacct/260522-maivo:latest
         type: string
       debug_tmate:
         description: Open an interactive SSH session before setup
@@ -47,12 +47,10 @@ defaults:
 
 env:
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
-  GOPROXY: https://goproxy.cn,direct
-  GOSUMDB: sum.golang.google.cn
-  BUILDTAGS: seccomp idmapped_mnt
   MAIVO_GATE_MODE: ci
   MAIVO_CI_TEST_ROOT: /tmp/maivo
   MAIVO_CI_IMAGE_CACHE_DIR: /tmp/maivo/images
+  MAIVO_IMAGE: ${{ inputs.maivo_image || 'ghcr.io/lwmacct/260522-maivo:latest' }}
 
 jobs:
   prepare:
@@ -126,41 +124,23 @@ jobs:
       - name: Checkout CI repository
         uses: actions/checkout@v7.0.0
 
-      - name: Require private repository token
-        env:
-          MAIVO_REPO_TOKEN: ${{ secrets.MAIVO_REPO_TOKEN }}
-        run: |
-          if [[ -z "${MAIVO_REPO_TOKEN}" ]]; then
-            echo "::error::Set repository secret MAIVO_REPO_TOKEN with read access to lwmacct/260522-maivo."
-            exit 1
-          fi
-
-      - name: Checkout Maivo
-        uses: actions/checkout@v7.0.0
-        with:
-          repository: lwmacct/260522-maivo
-          ref: ${{ inputs.maivo_ref || 'main' }}
-          path: maivo
-          token: ${{ secrets.MAIVO_REPO_TOKEN }}
-
       - name: Open tmate session
         if: ${{ github.event_name == 'workflow_dispatch' && inputs.debug_tmate && matrix.workload == inputs.debug_workload }}
         uses: mxschmitt/action-tmate@v3
         with:
           limit-access-to-actor: true
 
-      - name: Set up Go
-        uses: actions/setup-go@v6.5.0
-        with:
-          go-version-file: maivo/go.mod
-          cache-dependency-path: maivo/go.sum
-          cache: true
-
-      - name: Install Task
-        uses: go-task/setup-task@v2
-        with:
-          version: 3.50.0
-          repo-token: ${{ github.token }}
+      - name: Install ORAS
+        env:
+          ORAS_VERSION: 1.3.2
+        run: |
+          set -euo pipefail
+          curl -fsSLO "https://github.com/oras-project/oras/releases/download/v${ORAS_VERSION}/oras_${ORAS_VERSION}_linux_amd64.tar.gz"
+          mkdir -p oras-install
+          tar -zxf "oras_${ORAS_VERSION}_linux_amd64.tar.gz" -C oras-install
+          sudo mv oras-install/oras /usr/local/bin/
+          rm -rf "oras_${ORAS_VERSION}_linux_amd64.tar.gz" oras-install
+          oras version
 
       - name: Install dependencies
         run: bash scripts/maivo-ci.sh install-dependencies

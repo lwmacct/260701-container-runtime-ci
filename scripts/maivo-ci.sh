@@ -7,13 +7,11 @@ _script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 _repo_root="$(cd "${_script_dir}/.." && pwd)"
 _runtime_test_dir="${_repo_root}/ci/runtime/test"
 
-_maivo_dir="${MAIVO_DIR:-${_repo_root}/maivo}"
+_maivo_image="${MAIVO_IMAGE:-ghcr.io/lwmacct/260522-maivo:latest}"
 _test_root="${MAIVO_CI_TEST_ROOT:-/tmp/maivo}"
 _image_cache_dir="${MAIVO_CI_IMAGE_CACHE_DIR:-${_test_root}/images}"
-_build_tags="${BUILDTAGS:-seccomp idmapped_mnt}"
 _gate_mode="${MAIVO_GATE_MODE:-ci}"
-_host_goarch="${MAIVO_CI_GOARCH:-$(go env GOARCH 2>/dev/null || uname -m)}"
-_bin_dir="${BIN_DIR:-bin-${_host_goarch}}"
+_target_platform="${MAIVO_IMAGE_PLATFORM:-linux/amd64}"
 _release_root="${MAIVO_RELEASE_ROOT:-/opt/maivo/releases}"
 _current_link="${MAIVO_CURRENT_LINK:-/opt/maivo/current}"
 _run_id="${MAIVO_WORKLOAD_RUN_ID:-${GITHUB_RUN_ID:-local}-${GITHUB_RUN_ATTEMPT:-1}}"
@@ -35,10 +33,8 @@ __require_cmd() {
 __install_dependencies() {
   sudo apt-get update
   sudo DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
-    build-essential \
     jq \
-    libseccomp-dev \
-    pkg-config \
+    libseccomp2 \
     util-linux
 }
 
@@ -49,21 +45,17 @@ __show_host_capabilities() {
   findmnt /sys/fs/bpf || true
   docker version
   docker info
-  go version
-  task --version
+  oras version
 }
 
 __setup_runtime_host() {
-  __require_cmd task
   __require_cmd sudo
-  __require_cmd go
-  __require_cmd gcc
   __require_cmd docker
   __require_cmd systemctl
   __require_cmd jq
+  __require_cmd oras
 
   __init_ci_dirs
-  __build_maivo_binaries
   __install_maivo_binaries
   __install_maivo_systemd_unit
   __configure_docker_runtime
@@ -76,16 +68,50 @@ __init_ci_dirs() {
   sudo chown -R "$(id -u):$(id -g)" "$_test_root"
 }
 
-__build_maivo_binaries() {
-  __log "building maivo binaries for linux/${_host_goarch}"
-  cd "$_maivo_dir"
-  GOOS=linux GOARCH="$_host_goarch" CGO_ENABLED=1 BUILDTAGS="$_build_tags" BIN_DIR="$_bin_dir" task build
+__image_repo() {
+  local _ref="$1"
+  local _repo _last
+
+  _repo="${_ref%%@*}"
+  _last="${_repo##*/}"
+  if [[ "$_last" == *:* ]]; then
+    _repo="${_repo%:*}"
+  fi
+  printf '%s' "$_repo"
+}
+
+__extract_maivo_binaries_from_image() {
+  local _dest="$1"
+  local _work_dir _manifest _repo _digest _layer _i
+
+  _work_dir="$(mktemp -d "${_test_root}/oras-image.XXXXXX")"
+  _manifest="${_work_dir}/manifest.json"
+  _repo="$(__image_repo "$_maivo_image")"
+
+  __log "fetching ${_target_platform} manifest from ${_maivo_image}"
+  oras manifest fetch --platform "$_target_platform" --output "$_manifest" "$_maivo_image"
+
+  mkdir -p "${_work_dir}/rootfs" "${_work_dir}/layers"
+  _i=0
+  while IFS= read -r _digest; do
+    [[ -n "$_digest" ]] || continue
+    _i=$((_i + 1))
+    _layer="${_work_dir}/layers/${_i}.tar"
+    __log "fetching layer ${_i}: ${_digest}"
+    oras blob fetch --output "$_layer" "${_repo}@${_digest}"
+    tar -xf "$_layer" -C "${_work_dir}/rootfs"
+  done < <(jq -r '.layers[].digest' "$_manifest")
+
+  install -d -m 0755 "$_dest"
+  install -m 0755 "${_work_dir}/rootfs/usr/local/bin/maivo-daemon" "${_dest}/maivo-daemon"
+  install -m 0755 "${_work_dir}/rootfs/usr/local/bin/maivo-runtime" "${_dest}/maivo-runtime"
+  rm -rf "$_work_dir"
 }
 
 __install_maivo_binaries() {
-  local _rev _release
-  _rev="$(git -C "$_maivo_dir" rev-parse --short=12 HEAD)"
-  _release="${_release_root}/$(date +%Y%m%d%H%M%S)-${_rev}-${_host_goarch}-ci"
+  local _release _artifact_bin_dir
+  _release="${_release_root}/$(date +%Y%m%d%H%M%S)-ci"
+  _artifact_bin_dir="${_test_root}/maivo-bin"
 
   __log "removing previous validation containers before installing binaries"
   docker ps -a --format '{{.Names}}' |
@@ -95,10 +121,15 @@ __install_maivo_binaries() {
     awk '/^maivo-docker-in-docker/ { print }' |
     xargs -r docker network rm >/dev/null 2>&1 || true
 
+  rm -rf "$_artifact_bin_dir"
+  __extract_maivo_binaries_from_image "$_artifact_bin_dir"
+  "${_artifact_bin_dir}/maivo-daemon" version
+  "${_artifact_bin_dir}/maivo-runtime" version
+
   __log "installing maivo binaries to ${_release}"
   sudo install -d -m 0755 "${_release}/bin"
-  sudo install -m 0755 "${_maivo_dir}/${_bin_dir}/maivo-runtime" "${_release}/bin/maivo-runtime"
-  sudo install -m 0755 "${_maivo_dir}/${_bin_dir}/maivo-daemon" "${_release}/bin/maivo-daemon"
+  sudo install -m 0755 "${_artifact_bin_dir}/maivo-runtime" "${_release}/bin/maivo-runtime"
+  sudo install -m 0755 "${_artifact_bin_dir}/maivo-daemon" "${_release}/bin/maivo-daemon"
   sudo ln -sfn "$_release" "$_current_link"
   sudo ln -sfn "${_current_link}/bin/maivo-runtime" /usr/bin/maivo-runtime
   sudo ln -sfn "${_current_link}/bin/maivo-daemon" /usr/bin/maivo-daemon

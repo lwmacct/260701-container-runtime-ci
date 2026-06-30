@@ -16,12 +16,6 @@ __image_tag() {
 	fi
 }
 
-_build_tags="${BUILDTAGS:-seccomp idmapped_mnt}"
-_host_goarch="${MAIVO_CI_GOARCH:-$(go env GOARCH 2>/dev/null || uname -m)}"
-_bin_dir="${BIN_DIR:-bin-${_host_goarch}}"
-_release_root="${MAIVO_RELEASE_ROOT:-/opt/maivo/releases}"
-_current_link="${MAIVO_CURRENT_LINK:-/opt/maivo/current}"
-
 _test_root="${MAIVO_CI_TEST_ROOT:-/data/maivo}"
 _workload_id="${MAIVO_WORKLOAD_ID:-}"
 _workload_resource_id=""
@@ -79,9 +73,6 @@ _seccomp_notify_concurrency_mount_iterations="${MAIVO_CI_SECCOMP_NOTIFY_CONCURRE
 
 _inner_nginx_base_image="${MAIVO_CI_INNER_NGINX_BASE_IMAGE:-docker.io/nginx:latest}"
 _inner_nginx_image="${MAIVO_CI_INNER_NGINX_IMAGE:-$(__image_tag maivo-ci/nginx-workload latest)}"
-
-export GOPROXY="${GOPROXY:-https://goproxy.cn,direct}"
-export GOSUMDB="${GOSUMDB:-sum.golang.google.cn}"
 
 __require_cmd() {
 	local _cmd="$1"
