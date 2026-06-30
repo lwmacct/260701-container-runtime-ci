@@ -17,7 +17,12 @@ session on the GitHub-hosted runner before the probe runs.
 
 `Maivo CI Gate Mode` checks out `lwmacct/260522-maivo` as the tested source
 tree. The runtime setup, gate check, diagnostics, and workload flow live in this
-repository under `scripts/maivo-ci.sh` and `workloads/`.
+repository under `scripts/maivo-ci.sh` and `ci/runtime/test/`.
+
+All migrated runtime workloads are stored in `ci/runtime/test/workloads/`.
+The workflow defaults to `procfs-cpu` because standard GitHub-hosted
+`ubuntu-24.04` runners do not provide active BPF LSM. Manual runs can pass a
+space-separated `workloads` value such as `procfs-cpu procfs-memory` or `all`.
 
 Because `lwmacct/260522-maivo` is private, configure repository secret
 `MAIVO_REPO_TOKEN` before running `Maivo CI Gate Mode`. A fine-grained GitHub

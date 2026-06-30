@@ -13,6 +13,11 @@ on:
         required: true
         default: false
         type: boolean
+      workloads:
+        description: Runtime workloads to run, separated by spaces; use all for every migrated workload
+        required: true
+        default: procfs-cpu
+        type: string
 
 concurrency:
   group: maivo-ci-gate-mode-${{ github.ref }}
@@ -33,6 +38,7 @@ env:
   MAIVO_GATE_MODE: ci
   MAIVO_CI_TEST_ROOT: /tmp/maivo
   MAIVO_CI_IMAGE_CACHE_DIR: /tmp/maivo/images
+  MAIVO_CI_WORKLOADS: ${{ inputs.workloads || 'procfs-cpu' }}
 
 jobs:
   setup:
@@ -104,8 +110,8 @@ jobs:
       - name: Verify CI gate mode
         run: bash scripts/maivo-ci.sh verify-gate
 
-      - name: Run procfs CPU workload
-        run: bash scripts/maivo-ci.sh procfs-cpu
+      - name: Run runtime workloads
+        run: bash scripts/maivo-ci.sh run-workloads
 
       - name: Collect logs
         if: always()

@@ -5,6 +5,7 @@ set -euo pipefail
 
 _script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 _repo_root="$(cd "${_script_dir}/.." && pwd)"
+_runtime_test_dir="${_repo_root}/ci/runtime/test"
 
 _maivo_dir="${MAIVO_DIR:-${_repo_root}/maivo}"
 _test_root="${MAIVO_CI_TEST_ROOT:-/tmp/maivo}"
@@ -18,11 +19,6 @@ _current_link="${MAIVO_CURRENT_LINK:-/opt/maivo/current}"
 _run_id="${MAIVO_WORKLOAD_RUN_ID:-${GITHUB_RUN_ID:-local}-${GITHUB_RUN_ATTEMPT:-1}}"
 _resource_id="$(printf '%s' "$_run_id" | tr -c '[:alnum:]_.-' '-')"
 _resource_id="${_resource_id:0:32}"
-
-_procfs_cpu_name="maivo-procfs-cpu-${_resource_id}"
-_procfs_cpu_image="maivo-ci/procfs-cpu:${_resource_id}"
-_procfs_cpu_base_image="${MAIVO_CI_PROCFS_CPU_BASE_IMAGE:-1181.s.kuaicdn.cn:11818/docker.io/library/python:3.12-alpine}"
-_procfs_cpu_quota_cpus="${MAIVO_CI_PROCFS_CPU_QUOTA_CPUS:-0.1}"
 
 __log() {
   printf '\n==> %s\n' "$*" >&2
@@ -180,11 +176,9 @@ __configure_docker_runtime() {
 
 __restart_maivo_services() {
   __log "restarting maivo-daemon and docker"
-  docker rm -f \
-    "${_procfs_cpu_name}" \
-    "${_procfs_cpu_name}-nolimit" \
-    "${_procfs_cpu_name}-idle-isolation" \
-    "${_procfs_cpu_name}-pressure" >/dev/null 2>&1 || true
+  docker ps -a --format '{{.Names}}' |
+    awk '/^maivo-(docker-in-docker|kubernetes-k3s|systemd-pid1|procfs-memory|procfs-cpu|seccomp-notify-concurrency|container-security-policy)/ { print }' |
+    xargs -r docker rm -f >/dev/null 2>&1 || true
   sudo truncate -s 0 /var/log/maivo-daemon.log 2>/dev/null || sudo install -m 0600 /dev/null /var/log/maivo-daemon.log
   sudo systemctl reset-failed docker.service maivo-daemon.service maivod.service || true
   sudo systemctl stop maivo-daemon.service maivod.service || true
@@ -219,77 +213,32 @@ __assert_maivo_ready() {
   docker info --format '{{json .Runtimes}}' | jq -e 'has("maivo-runtime")' >/dev/null
 }
 
-__cleanup_procfs_cpu() {
-  docker rm -f \
-    "${_procfs_cpu_name}" \
-    "${_procfs_cpu_name}-nolimit" \
-    "${_procfs_cpu_name}-idle-isolation" \
-    "${_procfs_cpu_name}-pressure" >/dev/null 2>&1 || true
-}
-
-__build_procfs_cpu_image() {
-  __log "building ${_procfs_cpu_image}"
-  docker build --network host \
-    --build-arg "BASE_IMAGE=${_procfs_cpu_base_image}" \
-    -t "$_procfs_cpu_image" \
-    "${_repo_root}/workloads/procfs-cpu"
-}
-
-__run_procfs_cpu() {
+__run_workloads() {
   __require_cmd docker
   __require_cmd jq
+  __require_cmd flock
+  local -a _workloads=("$@")
 
   __assert_maivo_ready
-  __cleanup_procfs_cpu
-  trap __cleanup_procfs_cpu EXIT
-  __build_procfs_cpu_image
+  if (( ${#_workloads[@]} == 0 )); then
+    read -r -a _workloads <<<"${MAIVO_CI_WORKLOADS:-procfs-cpu}"
+  fi
+  if (( ${#_workloads[@]} == 0 )); then
+    _workloads=(procfs-cpu)
+  fi
 
-  __log "running host-equivalent CPU presentation validation without CPU limits"
-  docker run --rm \
-    --name "${_procfs_cpu_name}-nolimit" \
-    --hostname "${_procfs_cpu_name}-nolimit" \
-    --runtime maivo-runtime \
-    --cgroupns=private \
-    --label io.backend.security.profile=default \
-    -e "CI_PROCFS_CPU_EXPECT_VISIBLE_FROM_AFFINITY=1" \
-    -e "CI_PROCFS_CPU_EXPECT_AFFINITY_MATCH=1" \
-    "$_procfs_cpu_image"
+  export MAIVO_CI_TEST_ROOT="$_test_root"
+  export MAIVO_CI_IMAGE_CACHE_DIR="$_image_cache_dir"
+  export MAIVO_WORKLOAD_RUN_ID="$_resource_id"
 
-  __log "running automatic CPU quota presentation validation"
-  docker run --rm \
-    --name "$_procfs_cpu_name" \
-    --hostname "$_procfs_cpu_name" \
-    --runtime maivo-runtime \
-    --cgroupns=private \
-    --cpus "$_procfs_cpu_quota_cpus" \
-    --label io.backend.security.profile=default \
-    -e "CI_PROCFS_CPU_EXPECT_VISIBLE=1" \
-    -e "CI_PROCFS_CPU_EXPECT_AFFINITY_MATCH=1" \
-    -e "CI_PROCFS_CPU_CHECK_USAGE=1" \
-    "$_procfs_cpu_image"
-
-  __log "running CPU idle isolation validation under host-side load"
-  docker run -d \
-    --name "${_procfs_cpu_name}-pressure" \
-    --hostname "${_procfs_cpu_name}-pressure" \
-    "$_procfs_cpu_image" \
-    python3 -c 'while True: pass' >/dev/null
-
-  docker run --rm \
-    --name "${_procfs_cpu_name}-idle-isolation" \
-    --hostname "${_procfs_cpu_name}-idle-isolation" \
-    --runtime maivo-runtime \
-    --cgroupns=private \
-    --cpus "$_procfs_cpu_quota_cpus" \
-    --label io.backend.security.profile=default \
-    -e "CI_PROCFS_CPU_EXPECT_VISIBLE=1" \
-    -e "CI_PROCFS_CPU_EXPECT_AFFINITY_MATCH=1" \
-    -e "CI_PROCFS_CPU_CHECK_IDLE=1" \
-    "$_procfs_cpu_image"
-
-  __cleanup_procfs_cpu
-  __assert_maivo_ready
-  echo "procfs-cpu-validation-ok"
+  case "${_workloads[*]}" in
+  all)
+    bash "${_runtime_test_dir}/run.sh" all
+    ;;
+  *)
+    bash "${_runtime_test_dir}/run.sh" parallel "${_workloads[@]}"
+    ;;
+  esac
 }
 
 __collect_logs() {
@@ -302,7 +251,7 @@ __collect_logs() {
     docker info || true
     docker ps -a || true
     docker images || true
-    for _container in $(docker ps -a --format '{{.Names}}' | awk '/^maivo-procfs-cpu/ { print }'); do
+    for _container in $(docker ps -a --format '{{.Names}}' | awk '/^maivo-/ { print }'); do
       docker logs "$_container" || true
     done
     sudo systemctl --no-pager --full status docker.service maivo-daemon.service || true
@@ -331,7 +280,7 @@ commands:
   show-host-capabilities
   setup-runtime-host
   verify-gate
-  procfs-cpu
+  run-workloads [workload...]
   collect-logs
   warm-go-cache
 EOF
@@ -350,8 +299,9 @@ setup-runtime-host)
 verify-gate)
   __verify_gate
   ;;
-procfs-cpu)
-  __run_procfs_cpu
+run-workloads)
+  shift
+  __run_workloads "$@"
   ;;
 collect-logs)
   __collect_logs
