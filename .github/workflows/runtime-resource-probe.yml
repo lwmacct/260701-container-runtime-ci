@@ -41,7 +41,7 @@ jobs:
     runs-on: ${{ inputs.runner || 'ubuntu-24.04' }}
     timeout-minutes: 30
     env:
-      STRICT: ${{ inputs.strict != false && '1' || '0' }}
+      STRICT: ${{ github.event_name == 'workflow_dispatch' && inputs.strict == false && '0' || '1' }}
       PROBE_LOG_DIR: /tmp/runtime-resource-probe
     steps:
       - name: Checkout
